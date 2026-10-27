@@ -67,7 +67,7 @@ interface
 uses
   Winapi.Windows,
   System.SysUtils, System.Classes,
-  Vcl.Graphics;
+  Vcl.Graphics, Vcl.Imaging.PngImage;
 
 // Cascading image load from clipboard
 // Tries formats in priority order: PNG -> CF_DIBV5 -> standard VCL
@@ -137,10 +137,26 @@ function TrySaveDIBV5(Graphic: TGraphic): Boolean;
 // Кладёт изображение в буфер через стандартный механизм VCL (TClipboard.Assign).
 function TrySaveVCL(Graphic: TGraphic): Boolean;
 
+// Convert TBitmap to TPNGImage preserving the alpha channel
+// Конвертировать TBitmap в TPNGImage с переносом альфа-канала
+function BitmapToPNG(ABitmap: TBitmap): TPNGImage;
+
+// Adds Unicode text to clipboard without clearing other formats
+// (for example, PNG / CF_DIBV5)
+// Добавляет Unicode-текст в буфер, не очищая остальные форматы
+// (например PNG / CF_DIBV5)
+function TrySaveStringToClipboard(const Value: string): Boolean;
+
+// Reads Unicode text from clipboard
+// Returns False if CF_UNICODETEXT is absent or malformed
+// Читает Unicode-текст из буфера
+// Возвращает False, если CF_UNICODETEXT отсутствует или повреждён
+function TryLoadStringFromClipboard(out Value: string): Boolean;
+
 implementation
 
 uses
-  Vcl.Clipbrd, Vcl.Imaging.PngImage;
+  Vcl.Clipbrd;
 
 var
   CF_PNG: Word;
@@ -669,7 +685,8 @@ begin
   end;
 end;
 
-{$EndRegion}
+
+{$EndRegion}
 
 {$Region 'Saving to clipboard'}
 // Сохранение в буфер обмена
@@ -729,7 +746,7 @@ var
   Y: Integer;
   SrcRow: PByte;
 begin
-  Result := False;
+//  Result := False;
 
   Bmp := GraphicTo32Bitmap(Graphic);
   try
@@ -836,6 +853,66 @@ begin
     exit(True);
 
   Result := TrySaveVCL(Graphic);
+end;
+
+{$EndRegion}
+
+{$Region 'Text clipboard'}
+// Текстовый буфер обмена
+
+function TrySaveStringToClipboard(const Value: string): Boolean;
+var DataSize: NativeUInt;
+begin
+  // +1: завершающий #0 обязателен для CF_UNICODETEXT.
+  DataSize := (NativeUInt(Length(Value)) + 1) * SizeOf(WideChar);
+
+  Clipboard.Open;
+  try
+    // Здесь намеренно НЕ вызывается Clipboard.Clear:
+    // PNG, CF_DIBV5 и прочие уже имеющиеся форматы должны сохраниться
+    Result := SetClipboardData(
+      CF_UNICODETEXT,
+      PWideChar(Value),
+      DataSize
+    );
+  finally
+    Clipboard.Close;
+  end;
+end;
+
+function TryLoadStringFromClipboard(out Value: string): Boolean;
+var
+  Stream: TMemoryStream;
+  P: PWideChar;
+  CharCount, I: NativeUInt;
+begin
+  Result := False;
+  Value := '';
+
+  Stream := GetClipboardStream(CF_UNICODETEXT);
+  if Stream = nil then
+    exit;
+
+  try
+    // CF_UNICODETEXT должен содержать целое число WideChar и завершающий ноль
+    if (Stream.Size < SizeOf(WideChar)) or
+       ((Stream.Size mod SizeOf(WideChar)) <> 0) then
+      exit;
+
+    P := PWideChar(Stream.Memory);
+    CharCount := Stream.Size div SizeOf(WideChar);
+
+    // Не предполагаем, что повреждённые данные обязательно содержат #0
+    for I := 0 to CharCount - 1 do
+      if P[I] = #0 then
+      begin
+        SetString(Value, P, I);
+        Result := True;
+        exit;
+      end;
+  finally
+    Stream.Free;
+  end;
 end;
 
 {$EndRegion}
